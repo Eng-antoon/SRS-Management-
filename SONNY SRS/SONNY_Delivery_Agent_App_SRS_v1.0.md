@@ -95,10 +95,24 @@ SONNY is designed as a pragmatic, DA-centric delivery management application tha
 ### 3.2 Core Design Principles
 1. **Workflow Alignment:** Match real DA operational patterns rather than forcing artificial processes
 2. **Data Transparency:** Capture comprehensive operational metrics for business intelligence
-3. **Seamless Integration:** Maintain 100% compatibility with existing Locus administrative systems
+3. **Seamless Integration:** Maintain 100% compatibility with existing Locus administrative systems through comprehensive API integration
 4. **Incremental Replacement:** Phased approach to minimize operational disruption
+5. **Business Value Focus:** Prioritize features that deliver immediate operational improvements and cost savings
 
-### 3.3 Strategic Implementation Approach
+### 3.3 Locus Integration Business Value
+**Immediate Business Benefits:**
+- **Operational Continuity:** Zero disruption to existing dispatch and monitoring workflows
+- **Cost Optimization:** Reduced per-agent licensing costs while maintaining full administrative capabilities
+- **Enhanced Data Collection:** Real-time location tracking and performance analytics beyond current capabilities
+- **Improved User Experience:** Customized DA interface while preserving supervisor visibility
+
+**Strategic Advantages:**
+- **Vendor Independence:** Reduced dependency on Locus for mobile application functionality
+- **Innovation Capability:** Ability to rapidly implement business-specific features and improvements
+- **Data Ownership:** Enhanced control over operational data and analytics
+- **Scalability:** Foundation for future expansion and custom dashboard development
+
+### 3.4 Strategic Implementation Approach
 
 #### Phase 1: Mobile App Replacement (Current Scope)
 - Develop SONNY Android application with Locus-compatible data exchange
@@ -319,25 +333,34 @@ SONNY is designed as a pragmatic, DA-centric delivery management application tha
 
 ### 6.2 Tour Management and Assignment (Epic COR-379)
 
-#### 6.2.1 Tour Ingestion
+#### 6.2.1 Tour Ingestion via Locus API
 **Requirement ID:** FR-003  
 **Priority:** High  
-**Description:** Automated import of tour plans from Locus system
+**Description:** Automated import of tour plans from Locus system via GET tour API
 
 **Functional Specifications:**
-- Real-time detection and import of Locus tour assignments
-- Complete tour data extraction including:
-  - Tour ID and assigned Agent ID
-  - Sequential stop list with complete addresses
-  - Task types (Pickup/Drop-off) and special instructions
-  - Product information and quantities
-- Tour modification and cancellation synchronization
+- **Tour Data Retrieval:** Integration with `/v1/client/{clientId}/tour/{tourId}` endpoint
+- **Complete Tour Structure Extraction:**
+  - Tour ID, name, and assigned rider information
+  - Visit sequences with location and timing data
+  - Task details including pickup and delivery requirements
+  - Fleet information (rider, vehicle model, transporter)
+  - Summary data (task counts, volume, resource utilization)
+- **Real-time Tour Updates:** Monitoring for tour status changes and modifications
+- **Tour Include Parameters:** SEQUENCE, TOUR_VISITS, VISITS_INFO, EXECUTION_TRAIL, FLEET, TASKS
+
+**Locus Tour Data Structure Integration:**
+- **Tour Metadata:** id, name, status, date, plannedSequence, fleetInfo
+- **Visit Information:** visitId, location, timeWindow, status, checklists
+- **Task Graph:** visits with volumes, resources, orderDetail, payments
+- **Fleet Details:** rider profile, vehicle model, transporter information
+- **Performance Metrics:** planned vs. actual travel distance/duration
 
 **Data Requirements:**
-- Plans, Tours, Orders, Riders
-- SKUs and quantity tracking (planned vs. actual delivered)
-- Address and location data with geocoding
-- Customer-specific delivery instructions
+- **Tour Management:** Complete tour lifecycle from assignment to completion
+- **Location Data:** GPS coordinates, addresses, geocoding metadata
+- **Resource Tracking:** Volume utilization, weight limits, skill requirements
+- **Timeline Management:** Planned vs. actual timing with ETA calculations
 
 #### 6.2.2 Tour Display and Management
 **Requirement ID:** FR-004  
@@ -393,22 +416,39 @@ SONNY is designed as a pragmatic, DA-centric delivery management application tha
 #### 6.4.1 Locus Integration Bridge
 **Requirement ID:** FR-008  
 **Priority:** Critical  
-**Description:** 100% data synchronization with Locus administrative dashboard
+**Description:** 100% data synchronization with Locus administrative dashboard using Locus API
 
 **Functional Specifications:**
-- Real-time transmission of all trip progress updates
-- Tour start/stop event synchronization
-- Task completion status updates (pickup/drop-off)
-- Photo upload and attachment to corresponding Locus records
-- Location tracking and status change propagation
+- **Location Updates:** Bulk rider location updates via `/v1/client/{clientId}/rider-locations` endpoint
+  - Real-time GPS tracking with battery status monitoring
+  - Bulk update capability for performance optimization (multiple locations per request)
+  - GPS accuracy validation and provider information
+- **Task Status Synchronization:** Real-time task updates via `/v1/client/{clientId}/task/{taskId}/status`
+  - Status transitions: RECEIVED → WAITING → ACCEPTED → STARTED → ARRIVED → TRANSACTING → COMPLETED
+  - Visit-level status updates via `/v1/client/{clientId}/task/{taskId}/visit/{visitId}/status`
+  - Timestamp synchronization with ISO-8601 format
+- **Proof of Delivery:** POD upload via `/v1/client/{clientId}/task/{taskId}/custom-fields`
+  - Photo attachment with metadata
+  - Digital signature storage
+  - Custom field data for additional delivery information
+- **Tour Management:** Tour data retrieval via `/v1/client/{clientId}/tour/{tourId}`
+  - Complete tour structure including visit sequences
+  - Fleet and rider information synchronization
+  - Performance analytics and summary data
 
-**Data Synchronization Requirements:**
-- Tour start/stop events
-- Individual task completion confirmations
-- Proof of delivery photos with metadata
-- Location updates and GPS tracking
-- Status changes (traveling, transacting, arrived, departed)
-- Exception alerts and issue reports
+**API Integration Requirements:**
+- **Authentication:** Basic Authentication with secure credential management
+- **Error Handling:** Comprehensive HTTP status code handling (2xx, 4xx, 5xx)
+- **Retry Logic:** Exponential backoff for failed requests
+- **Rate Limiting:** Compliance with Locus API rate limits
+- **Data Validation:** Schema validation for all API payloads
+
+**Critical Data Synchronization Points:**
+- **Mandatory Location Fields:** lat, lng, provider, timestamp, riderId
+- **Battery Monitoring:** charge, chargingStatus, timestamp
+- **Task Status Updates:** status, triggerTime, location coordinates
+- **Visit Completions:** visit-specific status with proof of delivery
+- **Custom Fields:** POD photos, signatures, and delivery notes
 
 #### 6.4.2 Local Data Management
 **Requirement ID:** FR-009  
@@ -497,98 +537,423 @@ SONNY is designed as a pragmatic, DA-centric delivery management application tha
 - **Location:** GPS tracking and route data
 - **Sync_Queue:** Pending synchronization operations
 
-#### 7.2.2 Data Synchronization Strategy
-- **Real-time Sync:** Critical events (tour start/stop, task completion)
-- **Batch Sync:** Non-critical data (location updates, photos)
-- **Conflict Resolution:** Last-write-wins with manual override capability
-- **Offline Support:** Full operational capability with deferred synchronization
+#### 7.2.2 Locus Data Model Integration
+**Core Entity Mappings:**
+
+**Rider Profile Mapping:**
+```sql
+-- SONNY Local Schema
+CREATE TABLE rider_profiles (
+    rider_id VARCHAR(50) PRIMARY KEY,
+    name VARCHAR(100),
+    phone_number VARCHAR(20),
+    status ENUM('ACTIVE', 'INACTIVE'),
+    team_ids JSON,
+    skills JSON,
+    competency_rating DECIMAL(3,2),
+    last_sync_timestamp BIGINT,
+    locus_rider_data JSON -- Complete Locus rider object
+);
+```
+
+**Tour and Task Mapping:**
+```sql
+-- Tour Management Schema
+CREATE TABLE tours (
+    tour_id VARCHAR(100) PRIMARY KEY,
+    tour_name VARCHAR(200),
+    rider_id VARCHAR(50),
+    status ENUM('UNASSIGNED', 'QUEUED', 'STARTED', 'COMPLETED'),
+    planned_start_time DATETIME,
+    actual_start_time DATETIME,
+    planned_end_time DATETIME,
+    actual_end_time DATETIME,
+    locus_tour_data JSON, -- Complete Locus tour object
+    last_sync_timestamp BIGINT
+);
+
+CREATE TABLE tasks (
+    task_id VARCHAR(100) PRIMARY KEY,
+    tour_id VARCHAR(100),
+    sequence_number INT,
+    task_type ENUM('PICKUP', 'DELIVERY'),
+    status ENUM('RECEIVED', 'WAITING', 'ACCEPTED', 'STARTED', 'ARRIVED', 'TRANSACTING', 'COMPLETED', 'CANCELLED'),
+    customer_name VARCHAR(200),
+    customer_address TEXT,
+    latitude DECIMAL(10, 8),
+    longitude DECIMAL(11, 8),
+    planned_arrival_time DATETIME,
+    actual_arrival_time DATETIME,
+    completion_time DATETIME,
+    locus_task_data JSON,
+    FOREIGN KEY (tour_id) REFERENCES tours(tour_id)
+);
+```
+
+**Visit and Order Detail Mapping:**
+```sql
+CREATE TABLE visits (
+    visit_id VARCHAR(100) PRIMARY KEY,
+    task_id VARCHAR(100),
+    visit_type ENUM('HOMEBASE', 'CUSTOMER'),
+    status ENUM('RECEIVED', 'WAITING', 'ACCEPTED', 'STARTED', 'ARRIVED', 'TRANSACTING', 'COMPLETED', 'CANCELLED'),
+    location_data JSON,
+    checklist_values JSON,
+    proof_of_delivery JSON,
+    FOREIGN KEY (task_id) REFERENCES tasks(task_id)
+);
+
+CREATE TABLE order_line_items (
+    item_id VARCHAR(100) PRIMARY KEY,
+    task_id VARCHAR(100),
+    sku_name VARCHAR(200),
+    planned_quantity INT,
+    delivered_quantity INT,
+    price DECIMAL(10, 2),
+    currency VARCHAR(10),
+    status ENUM('PENDING', 'DELIVERED', 'PARTIAL', 'REFUSED'),
+    FOREIGN KEY (task_id) REFERENCES tasks(task_id)
+);
+```
+
+#### 7.2.3 Data Synchronization Strategy
+**Real-time Synchronization Events:**
+- Task status changes (STARTED, COMPLETED, CANCELLED)
+- Tour start and completion events
+- Critical location updates during active delivery
+- Emergency situations and escalations
+- POD photo uploads and confirmations
+
+**Batch Synchronization (5-minute intervals):**
+- Historical location tracking data
+- Performance metrics and analytics
+- Non-critical metadata updates
+- System health monitoring data
+
+**Conflict Resolution Strategy:**
+- **Tour Assignments:** Locus as authoritative source
+- **Field Execution Data:** SONNY as authoritative source
+- **Timestamp-based Resolution:** Latest update wins for concurrent changes
+- **Manual Override:** Critical discrepancies require supervisor intervention
+
+**Offline Support:**
+- Complete operational capability for 4+ hours without connectivity
+- Local data persistence with automatic sync upon reconnection
+- Conflict detection and resolution for offline-generated data
 
 ### 7.3 Integration Architecture
 
-#### 7.3.1 Fulfillment Engine Integration
-- **Authentication API:** DA profile validation and session management
-- **Tour Management API:** Tour assignment and status updates
-- **Data Storage API:** Comprehensive data persistence and retrieval
+#### 7.3.1 Locus API Integration Layer
+**Architecture Pattern:** Adapter Pattern with Circuit Breaker
+**Components:**
+- **API Client Manager:** Handles HTTP requests and authentication
+- **Data Mapper:** Transforms between SONNY and Locus data formats
+- **Retry Manager:** Implements exponential backoff and failure handling
+- **Cache Layer:** Local caching for frequently accessed tour and rider data
 
-#### 7.3.2 Locus Integration Middleware
-- **Webhook Interface:** Real-time event transmission to Locus
-- **Data Translation Layer:** Format conversion between SONNY and Locus
-- **Error Handling:** Retry mechanisms and failure notification
+**Integration Flow:**
+1. **Inbound Data Flow (Locus → SONNY):**
+   - Tour assignments retrieved via GET tour APIs
+   - Rider profile synchronization
+   - Vehicle and fleet information updates
+   - Administrative changes and updates
 
-#### 7.3.3 External Service Integration
-- **Mapping Services:** Google Maps for navigation and location services
-- **Camera Services:** Native camera integration for photo capture
-- **Communication Services:** SMS and phone integration for emergency contact
+2. **Outbound Data Flow (SONNY → Locus):**
+   - Real-time location updates via bulk rider-locations API
+   - Task status updates and completion events
+   - POD photos and documents via custom-fields API
+   - Visit-level status changes and confirmations
+
+#### 7.3.2 Data Synchronization Engine
+**Real-time Processing:**
+- **Event Queue:** Priority-based message queuing for critical events
+- **Sync Orchestrator:** Manages data consistency across systems
+- **Conflict Resolver:** Handles concurrent updates and data conflicts
+- **Health Monitor:** Tracks sync status and alerts on failures
+
+**Batch Processing:**
+- **Location Aggregator:** Batches location updates for performance
+- **Analytics Processor:** Processes performance metrics and reporting data
+- **Cleanup Manager:** Handles data retention and cleanup policies
+
+#### 7.3.3 Middleware Services
+**API Gateway Features:**
+- Request routing and load balancing
+- Authentication and authorization validation
+- Rate limiting and throttling
+- Request/response transformation
+- Logging and monitoring integration
+
+**Message Queue System:**
+- **High Priority Queue:** Critical events (task completion, emergencies)
+- **Standard Queue:** Regular updates (location, status changes)
+- **Retry Queue:** Failed operations requiring reprocessing
+- **Dead Letter Queue:** Permanently failed messages for manual review
+
 
 ---
 
 ## 8. System Integration Requirements
 
-### 8.1 Locus Webhook Interface (Epic COR-386, COR-385)
+### 8.1 Locus API Integration Architecture
 
-#### 8.1.1 Webhook Setup and Configuration
+#### 8.1.1 Authentication and Security
 **Technical Requirement:** TR-001  
-**Description:** Establish secure webhook endpoints for bidirectional data exchange
+**Description:** Secure communication with Locus API using Basic Authentication
 
-**Specifications:**
-- HTTPS-only communication with SSL certificate validation
-- Authentication token management for secure access
-- Rate limiting and error handling for high-volume operations
-- Monitoring and alerting for webhook failure scenarios
+**Authentication Specifications:**
+- Basic Authentication with credentials shared via secure channels
+- HTTPS-only communication for all API endpoints
+- API key management and rotation procedures
+- Request signing and validation for data integrity
+- Error handling for authentication failures and token expiration
 
-#### 8.1.2 Data Extraction and Transformation
-**Technical Requirement:** TR-002  
-**Description:** Extract and transform DA operational data from Locus webhooks
+**Security Requirements:**
+- Secure storage of authentication credentials
+- Rate limiting compliance (as per Locus guidelines)
+- SSL certificate validation for all requests
+- Audit logging for all API interactions
+- Data encryption for sensitive information transmission
 
-**Data Processing Requirements:**
-- Real-time parsing of Locus webhook payloads
-- Data validation and schema compliance verification
-- Transformation to SONNY internal data formats
-- Error logging and exception handling for malformed data
+#### 8.1.2 Core API Integration Endpoints
 
-### 8.2 Backend Infrastructure (Epic COR-384, COR-383)
+##### 8.1.2.1 Rider Management APIs
+**Endpoint:** `GET /v1/client/{clientId}/rider/{riderId}`
+**Purpose:** Retrieve and synchronize DA profile information
+**Integration Points:**
+- Rider profile synchronization from Locus to SONNY
+- Real-time status updates and availability tracking
+- Skills and capabilities management
+- Team assignment and hierarchy mapping
 
-#### 8.2.1 Hosting and Deployment
-**Technical Requirement:** TR-003  
-**Description:** Scalable cloud infrastructure for SONNY backend services
+**Data Structures:**
+```json
+{
+  "riderId": "string",
+  "name": "string", 
+  "phoneNumber": "string",
+  "status": "ACTIVE|INACTIVE",
+  "teams": ["teamId"],
+  "skills": ["skill1", "skill2"],
+  "competency": {
+    "rating": "number",
+    "experience": "string"
+  }
+}
+```
 
+##### 8.1.2.2 Location Tracking APIs
+**Endpoint:** `POST /v1/client/{clientId}/rider-locations`
+**Purpose:** Real-time location updates from SONNY to Locus
+**Integration Points:**
+- Bulk location update capabilities for performance optimization
+- Battery status monitoring and reporting
+- GPS accuracy and provider information
+- Movement tracking and route deviation analysis
+
+**Critical Data Fields:**
+- **Location Data:** latitude, longitude, accuracy, timestamp, speed
+- **Battery Status:** charge percentage, charging status, expected life
+- **GPS Metadata:** provider, GPS enabled status, location validity
+- **Rider Context:** riderId, timestamp synchronization
+
+**Location Update Payload:**
+```json
+{
+  "locations": [{
+    "location": {
+      "lat": "float (mandatory)",
+      "lng": "float (mandatory)", 
+      "accuracy": "number",
+      "provider": "string (mandatory)",
+      "timestamp": "int64 (mandatory)",
+      "speed": "number",
+      "gpsEnabled": "boolean",
+      "type": "PLACE",
+      "valid": "boolean"
+    },
+    "batteryStatus": {
+      "charge": "integer",
+      "chargingStatus": "PLUGGED_USB|PLUGGED_AC|CHARGING|NONE|UNAVAILABLE",
+      "timestamp": "int64 (mandatory)"
+    },
+    "riderId": "string (mandatory)"
+  }]
+}
+```
+
+##### 8.1.2.3 Task Management APIs
+**Endpoint:** `POST /v1/client/{clientId}/task/{taskId}/status`
+**Purpose:** Task status synchronization and completion tracking
+**Integration Points:**
+- Real-time task status updates (RECEIVED, WAITING, ACCEPTED, STARTED, ARRIVED, TRANSACTING, COMPLETED, CANCELLED)
+- Proof of delivery submission and attachment
+- Exception handling and escalation workflows
+- SLA tracking and performance monitoring
+
+**Task Status Update Structure:**
+```json
+{
+  "status": "COMPLETED|STARTED|ARRIVED|TRANSACTING|CANCELLED",
+  "triggerTime": "ISO-8601 timestamp",
+  "checklistValues": {},
+  "location": {
+    "lat": "number",
+    "lng": "number", 
+    "accuracy": "number",
+    "timestamp": "int64"
+  },
+  "customFields": {}
+}
+```
+
+**Endpoint:** `POST /v1/client/{clientId}/task/{taskId}/visit/{visitId}/status`
+**Purpose:** Individual visit status updates within multi-stop tasks
+**Integration Points:**
+- Granular pickup and drop-off tracking
+- Visit-specific proof of delivery
+- Customer interaction logging
+- Time-based performance metrics
+
+##### 8.1.2.4 Tour Management APIs
+**Endpoint:** `GET /v1/client/{clientId}/tour/{tourId}`
+**Purpose:** Comprehensive tour data retrieval and synchronization
+**Integration Points:**
+- Complete tour structure with visit sequences
+- Planned vs. actual route analysis
+- Resource utilization tracking
+- Performance analytics and reporting
+
+**Tour Data Structure:**
+```json
+{
+  "id": "string",
+  "name": "string",
+  "status": "UNASSIGNED|QUEUED|STARTED|COMPLETED",
+  "fleetInfo": {
+    "riderId": "string",
+    "rider": {},
+    "vehicleModel": {}
+  },
+  "tasks": [{
+    "taskId": "string",
+    "status": {},
+    "orderDetail": {
+      "lineItems": [],
+      "transactionDetail": {}
+    },
+    "taskGraph": {
+      "visits": []
+    }
+  }],
+  "summary": {
+    "taskCounts": {},
+    "volume": {},
+    "resourceUtilization": {}
+  }
+}
+```
+
+##### 8.1.2.5 Proof of Delivery APIs
+**Endpoint:** `POST /v1/client/{clientId}/task/{taskId}/custom-fields`
+**Purpose:** POD document and metadata upload
+**Integration Points:**
+- Photo upload and attachment to delivery records
+- Digital signature storage and verification
+- Customer feedback and notes collection
+- Invoice and receipt management
+
+### 8.2 Data Synchronization Strategy
+
+#### 8.2.1 Real-time Synchronization Requirements
+**Critical Events (Immediate Sync):**
+- Task status changes (Started, Completed, Cancelled)
+- Tour start and completion events
+- Emergency situations and escalations
+- Location updates during active deliveries
+
+**Batch Synchronization (Periodic):**
+- Historical location data (every 5 minutes)
+- Performance metrics and analytics
+- Non-critical metadata updates
+- System health and monitoring data
+
+#### 8.2.2 Error Handling and Retry Logic
+**HTTP Error Code Handling:**
+- **2xx Series:** Success confirmation and logging
+- **4xx Series:** Client error analysis and user notification
+- **5xx Series:** Server error retry with exponential backoff
+- **Network Failures:** Local queue management with persistent retry
+
+**Retry Mechanisms:**
+- Exponential backoff strategy (1s, 2s, 4s, 8s, 16s, max 60s)
+- Maximum retry attempts: 5 for critical operations, 3 for non-critical
+- Circuit breaker pattern for repeated failures
+- Manual override capabilities for emergency scenarios
+
+#### 8.2.3 Data Consistency and Conflict Resolution
+**Conflict Resolution Rules:**
+- Locus system as source of truth for tour assignments
+- SONNY system as source of truth for field execution data
+- Timestamp-based conflict resolution for concurrent updates
+- Manual intervention required for critical data discrepancies
+
+### 8.3 Integration Middleware Architecture
+
+#### 8.3.1 API Gateway Layer
+**Purpose:** Centralized API management and routing
+**Components:**
+- Request/response transformation
+- Authentication and authorization
+- Rate limiting and throttling
+- Logging and monitoring
+- Cache management for frequently accessed data
+
+#### 8.3.2 Message Queue System
+**Purpose:** Asynchronous processing and reliability
+**Features:**
+- Dead letter queue for failed messages
+- Message persistence for system reliability
+- Priority queuing for critical operations
+- Monitoring and alerting for queue health
+
+#### 8.3.3 Data Transformation Layer
+**Locus to SONNY Mapping:**
+- Tour structure conversion to internal format
+- Task and visit data normalization
+- Location data standardization
+- Status code translation and mapping
+
+**SONNY to Locus Mapping:**
+- Field execution data formatting
+- Photo and document encoding
+- Status update standardization
+- Error code translation
+
+### 8.4 Backend Infrastructure Requirements
+
+#### 8.4.1 Hosting and Deployment
 **Infrastructure Specifications:**
 - Cloud-based hosting with auto-scaling capabilities
 - Load balancing for high availability
 - Database clustering for performance and reliability
+- CDN integration for photo and document storage
 - Monitoring and alerting for system health
 
-#### 8.2.2 Project Initialization
-**Technical Requirement:** TR-004  
-**Description:** Complete backend project setup with development workflows
+#### 8.4.2 Security and Compliance
+**Security Requirements:**
+- End-to-end encryption for all data transmission
+- Secure API key management and rotation
+- Audit logging for all user actions and system events
+- Data backup and disaster recovery procedures
+- GDPR compliance for personal data handling
 
-**Development Requirements:**
-- CI/CD pipeline implementation
-- Code repository structure and branching strategy
-- Testing framework and quality assurance processes
-- Documentation and API specification management
-
-### 8.3 Fulfillment Engine Project Setup (Epic COR-382)
-
-#### 8.3.1 Core Engine Architecture
-**Technical Requirement:** TR-005  
-**Description:** Foundational fulfillment engine with extensible architecture
-
-**System Requirements:**
-- Microservices architecture for scalability
-- API gateway for service coordination
-- Database abstraction layer for multiple data sources
-- Event-driven architecture for real-time processing
-
-#### 8.3.2 Integration Framework
-**Technical Requirement:** TR-006  
-**Description:** Comprehensive integration framework for external system connectivity
-
-**Framework Components:**
-- Adapter pattern implementation for various external systems
-- Message queue management for asynchronous processing
-- Data consistency protocols across distributed systems
-- Monitoring and analytics for integration performance
+#### 8.4.3 Performance and Scalability
+**Performance Targets:**
+- API response time: < 500ms for 95% of requests
+- Concurrent user support: 1000+ active DAs
+- Data throughput: 10,000+ location updates per minute
+- System availability: 99.9% uptime SLA
 
 ---
 
@@ -676,21 +1041,33 @@ SONNY is designed as a pragmatic, DA-centric delivery management application tha
 ### 10.1 Business Success Metrics
 
 #### 10.1.1 Operational Efficiency
-- **Delivery Time Reduction:** 15% improvement in average delivery time per stop
-- **Route Optimization:** Measurable tracking of route deviations and efficiency gains
-- **Issue Resolution Time:** 50% reduction in average issue resolution time
+- **Delivery Time Reduction:** 15% improvement in average delivery time per stop through optimized workflows
+- **Route Optimization:** Measurable tracking of route deviations and efficiency gains via Locus tour analytics
+- **Issue Resolution Time:** 50% reduction in average issue resolution time through streamlined reporting
 - **Data Collection Improvement:** 100% real-time data capture vs. current end-of-day batch processing
+- **Location Accuracy:** Real-time GPS tracking with 99%+ accuracy through Locus API integration
 
-#### 10.1.2 Cost Efficiency
-- **Locus Licensing Cost Reduction:** Immediate 30% reduction in per-DA licensing costs
-- **Administrative Overhead:** 25% reduction in manual coordination effort
-- **Training Costs:** Reduced onboarding time for new DAs
+#### 10.1.2 Cost Efficiency and ROI
+- **Locus Licensing Optimization:** Reduced mobile app licensing costs while maintaining administrative capabilities
+- **Administrative Overhead:** 25% reduction in manual coordination effort through automated data sync
+- **Training Costs:** Reduced onboarding time for new DAs with intuitive interface design
+- **IT Infrastructure:** Reduced dependency on external vendor support and customization costs
+- **Operational Scaling:** Foundation for cost-effective expansion without proportional increase in administrative overhead
 
-#### 10.1.3 Data Quality and Visibility
-- **SLA Tracking:** Real-time visibility into delivery performance against SLAs
-- **Route Adherence:** Comprehensive tracking of planned vs. actual routes
-- **Exception Management:** Formal tracking and resolution of delivery exceptions
-- **Performance Analytics:** Enhanced business intelligence capabilities
+#### 10.1.3 Data Quality and Business Intelligence
+- **Real-time Visibility:** Complete operational visibility maintained in Locus dashboard through API integration
+- **SLA Tracking:** Real-time delivery performance monitoring with automated alerts
+- **Route Adherence:** Comprehensive tracking of planned vs. actual routes with deviation analysis
+- **Exception Management:** Formal tracking and resolution of delivery exceptions with audit trails
+- **Performance Analytics:** Enhanced business intelligence through granular data collection
+- **Predictive Insights:** Foundation for advanced analytics and machine learning applications
+
+#### 10.1.4 Strategic Business Value
+- **Vendor Independence:** Reduced critical dependency on single vendor for mobile operations
+- **Innovation Velocity:** Ability to rapidly implement business-specific improvements
+- **Competitive Advantage:** Custom features aligned with actual operational workflows
+- **Market Responsiveness:** Faster adaptation to changing business requirements
+- **Data Sovereignty:** Enhanced control over operational data and customer information
 
 ### 10.2 Technical Acceptance Criteria
 
@@ -700,11 +1077,15 @@ SONNY is designed as a pragmatic, DA-centric delivery management application tha
 - **Memory Usage:** < 200MB RAM consumption during active use
 - **Storage Requirements:** < 500MB local storage for full operational capability
 
-#### 10.2.2 Integration Reliability
-- **Locus Synchronization:** 99.9% successful data transmission to Locus systems
-- **Real-time Updates:** < 30-second latency for critical event synchronization
-- **Offline Capability:** 4-hour offline operation with complete data recovery
-- **Error Recovery:** Automatic retry and recovery for 95% of system failures
+#### 10.2.2 Locus API Integration Reliability
+- **API Success Rate:** 99.9% successful API calls to Locus endpoints
+- **Location Update Performance:** Bulk location updates processed within 5 seconds
+- **Task Status Sync:** < 30-second latency for critical status updates (STARTED, COMPLETED)
+- **POD Upload Success:** 99%+ success rate for proof of delivery photo uploads
+- **Tour Data Sync:** Complete tour synchronization within 60 seconds of assignment
+- **Error Recovery:** Automatic retry with exponential backoff for 95% of API failures
+- **Authentication Reliability:** Zero authentication failures during normal operations
+- **Offline Capability:** 4-hour offline operation with complete data recovery upon reconnection
 
 #### 10.2.3 Security and Compliance
 - **Data Security:** End-to-end encryption for all sensitive data transmission
